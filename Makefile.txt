@@ -1,0 +1,20 @@
+PYTHON := .venv\Scripts\python.exe
+RECIPE ?= recipes/grammar.jsonl
+SEED   ?= 42
+OUTPUTS_DIR ?= outputs
+REPORTS_DIR ?= reports
+DIST_DIR    ?= dist
+
+generate:
+	$(PYTHON) src/sdlg_edu/run_generate.py --recipe $(RECIPE) --seed $(SEED) --deterministic --outdir "$(OUTPUTS_DIR)"
+
+quality:
+	$(PYTHON) src/sdlg_edu/run_quality.py --input "$(OUTPUTS_DIR)/english_grammar_qa.jsonl" --out_json "$(REPORTS_DIR)/quality.json" --out_md "$(REPORTS_DIR)/quality_summary.md"
+	@echo "Quality summary -> $(REPORTS_DIR)/quality_summary.md"
+
+export:
+	$(PYTHON) src/sdlg_edu/export_csv.py --input "$(OUTPUTS_DIR)/english_grammar_qa.jsonl" --out "$(OUTPUTS_DIR)/english_grammar_qa.csv"
+
+package:
+	@mkdir -p "$(DIST_DIR)"
+	$(PYTHON) src/sdlg_edu/make_package.py --data "$(OUTPUTS_DIR)/english_grammar_qa.csv" --report "$(REPORTS_DIR)/quality.json" --readme docs/EN_GRAMMAR_README.md --out "$(DIST_DIR)/english_grammar_qa_v1.0.zip"
