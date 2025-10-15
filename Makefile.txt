@@ -16,5 +16,4 @@ export:
 	$(PYTHON) src/sdlg_edu/export_csv.py --input "$(OUTPUTS_DIR)/english_grammar_qa.jsonl" --out "$(OUTPUTS_DIR)/english_grammar_qa.csv"
 
 package:
-	@mkdir -p "$(DIST_DIR)"
 	$(PYTHON) src/sdlg_edu/make_package.py --data "$(OUTPUTS_DIR)/english_grammar_qa.csv" --report "$(REPORTS_DIR)/quality.json" --readme docs/EN_GRAMMAR_README.md --out "$(DIST_DIR)/english_grammar_qa_v1.0.zip"
