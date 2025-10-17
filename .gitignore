@@ -1,3 +1,8 @@
 outputs/
 dist/
 reports/*.json
+
+# dev junk
+__pycache__/
+*.bak.*
+

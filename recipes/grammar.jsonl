@@ -1,2 +1,12 @@
-{"topic":"present perfect","pattern":"contrast_present_perfect_vs_past"}
-{"topic":"articles","pattern":"choose_correct_article"}
+{"topic":"present perfect vs past","pattern":"contrast_present_perfect_vs_past","n":1}
+{"topic":"articles (a/an/the/zero)","pattern":"choose_correct_article","n":1}
+{"topic":"conditionals (0/1/2/3)","pattern":"generic_conditionals","n":1}
+{"topic":"passive voice","pattern":"generic_passive","n":1}
+{"topic":"comparatives/superlatives","pattern":"generic_comparatives","n":1}
+{"topic":"future forms (will/going to/present cont.)","pattern":"generic_future","n":1}
+{"topic":"subject–verb agreement","pattern":"generic_sva","n":1}
+{"topic":"relative clauses","pattern":"generic_relative","n":1}
+{"topic":"prepositions (time/place)","pattern":"generic_prepositions","n":1}
+{"topic":"gerunds vs infinitives","pattern":"generic_gvi","n":1}
+{"topic":"reported speech","pattern":"generic_reported","n":1}
+{"topic":"modals (obligation/possibility)","pattern":"generic_modals","n":1}
