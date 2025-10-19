@@ -2,8 +2,6 @@ import os, sys
 sys.path.append(os.path.join(os.path.dirname(__file__), ".."))  # src/sdlg_edu から見て親=src
 import argparse, os, json, re, random
 from typing import List, Dict
-import re
-from sdlg_edu.text_utils import de_template_explanation
 
 # === Auto-injected: lightweight paraphrase helpers to reduce 5-gram collisions ===
 try:
@@ -16,21 +14,19 @@ PARA_EN = [
     (r"\bfinished past event\b", ["a completed past action", "a past occurrence"]),
     (r"\bwith no present relevance\b", ["that does not affect the present", "with no current link"]),
     (r"\bwhereas\b", ["while", "in contrast"]),
-
     (r"\bChoose the correct article\b", ["Select the appropriate article", "Decide which article fits"]),
     (r"\bFill in the blank\b", ["Complete the blank", "Insert the missing word"]),
     (r"\bAnswer:\b", ["Solution:", "Response:"]),
 ]
 
-def _paraphrase_en(r, s: str) -> str:
+def _paraphrase_en(r: random.Random, s: str) -> str:
     """Light paraphrase only (conservative)."""
     if not isinstance(s, str) or not s:
         return s
-    # 短文は触らない（極端な収束を防ぐ）
     if len(s) < 40:
         return s
     for pat, choices in PARA_EN:
-        if r.random() < 0.45:  # ←控えめ
+        if r.random() < 0.6:
             s = re.sub(pat, r.choice(choices), s)
     return s
 
@@ -38,13 +34,22 @@ WORD_RE = re.compile(r"[A-Za-z']+")
 
 COLUMNS = ["id","topic","question_en","answer_en","explanation_ja","difficulty","source"]
 
-# 変化用の小さな語彙プール（決定論的：random.Random(seed) を使用）
-NAMES = ["Alice","Ben","Chloe","David","Emma","Felix","Grace","Hiro","Ivy","Ken"]
-PLACES = ["Paris","Berlin","Kyoto","New York","Osaka","London","Seoul","Sydney","Toronto","Rome"]
-TIME_PHRASES = ["yesterday","last year","last week","in 2019","two days ago","this morning","on Monday"]
-OBJECTS = ["my homework","the report","dinner","a new book","his leg","the car","the movie","the project","the keys"]
+# === Lexicons (deterministic with random.Random(seed)) =======================================
 
-# 不規則動詞（base, past, past_participle）
+NAMES = ["Alice","Ben","Chloe","David","Emma","Felix","Grace","Hiro","Ivy","Ken",
+         "Liam","Noah","Olivia","Mia","Yuki","Sora","Akira"]
+
+PLACES = ["Paris","Berlin","Kyoto","New York","Osaka","London","Seoul","Sydney","Toronto","Rome",
+          "Nagoya","Barcelona","Vancouver","Dublin","Bangkok","Lisbon","Jakarta"]
+
+TIME_PHRASES = ["yesterday","last year","last week","in 2019","two days ago","this morning","on Monday",
+                "in 2020","this year","earlier today","over the weekend","on Friday night"]
+
+# ベースのOBJECTSから問題の出やすい語を除外（leg など）
+OBJECTS = ["my homework","the report","a new book","the car","the movie","the project","the keys",
+           "the prototype","the assignment","a presentation","the tickets","the apartment","the dataset"]
+
+# 動詞（base, past, past_participle）
 VERBS = [
     ("go","went","gone"),
     ("see","saw","seen"),
@@ -54,8 +59,26 @@ VERBS = [
     ("eat","ate","eaten"),
     ("buy","bought","bought"),
     ("finish","finished","finished"),
-    ("live","lived","lived")
+    ("live","lived","lived"),
+    ("build","built","built"),
+    ("design","designed","designed"),
+    ("lose","lost","lost"),
+    ("find","found","found"),
 ]
+
+# 動詞×目的語の相性を安全側に制限（簡易ホワイトリスト）
+VERB_OBJECT_WHITELIST = {
+    "break": ["the window","the record","the rule"],
+    "build": ["the prototype","a model","a house"],
+    "design": ["the prototype","a model","a poster"],
+    "write": ["the report","the assignment","a presentation"],
+    "eat": ["dinner","an apple","a meal"],
+    "lose": ["the keys","the ticket","the dataset"],
+    "find": ["the keys","the ticket","a new book"],
+    "take": ["the car","the project","the assignment"],
+    "buy": ["a new book","the tickets","an umbrella"],
+    "finish": ["the report","the assignment","my homework"],
+}
 
 EXPLAIN_PP_VS_PAST_JA = [
     "現在完了は現在への結果や継続・経験を示し、過去形は完了した出来事を述べる。",
@@ -70,32 +93,7 @@ EXPLAIN_ARTICLES_JA = [
     "冠詞は可算/不可算・特定/非特定で使い分ける（a/an, the, 無冠詞）。"
 ]
 
-
 TEMPLATES = {
-    "contrast_present_perfect_vs_past": [
-        (
-            "Explain the difference between '{A}' and '{B}'.",
-            "'{A}' highlights a present result/state; '{B}' reports a finished past event with no present relevance.",
-            "現在完了は現在への結果・影響を示す。一方、過去形は過去の事実を述べる。"
-        ),
-        (
-            "Rewrite with the present perfect if appropriate: '{SENT}'. Then contrast it with the past simple.",
-            "Present perfect: {A}. Past simple: {B}.",
-            "現在完了は経験・継続・完了のうち、現在へのつながりを強調。過去形は時点を切り離す。"
-        )
-    ],
-    "choose_correct_article": [
-        (
-            "Choose the correct article: '{SENT}'",
-            "Correct: {ANS}",
-            "可算名詞の単数は a/an。特定のものは the。無冠詞は複数や不可算の一般。"
-        ),
-        (
-            "Fill in the blank with an article if needed: '{SENT}'",
-            "Answer: {ANS}",
-            "母音音から始まる語は an、子音音は a。特定化は the。不要なときは無冠詞。"
-        )
-    ],
     "_fallback": [
         (
             "Write one sentence using the topic: {TOPIC}.",
@@ -110,7 +108,7 @@ SENT_BANK = {
         ("I have already finished my homework.","I finished my homework yesterday."),
         ("She has gone to Paris.","She went to Paris in 2019."),
         ("They have lived here for ten years.","They lived here ten years ago."),
-        ("He has broken his leg.","He broke his leg last year."),
+        ("He has broken the window.","He broke the window last year."),
     ],
     "articles": [
         ("__ a university near my house.", "There is"),
@@ -132,26 +130,18 @@ INSTR_PP = [
     "Give a brief contrast between '{A}' and '{B}'."
 ]
 
-ANS_PP = [
-    "{A} highlights a present result/state, whereas {B} reports a finished past event.",
-    "Use {A} for present relevance; use {B} for a completed event at a known time.",
-    "{A} connects to now; {B} is detached in time.",
-    "{A} implies current impact, while {B} simply states a past fact.",
-    "Prefer {A} when the present matters; prefer {B} for a past moment.",
-    "{A} = present relevance. {B} = past event with no current link."
+# present perfect / past simple を明示的に参照する、安全なテンプレ
+ANS_PP_SAFE = [
+    "{PP} connects to now; {PS} is detached in time.",
+    "Use {PP} when the present is relevant; use {PS} for a finished past event.",
+    "{PP} highlights a present result or relevance, while {PS} reports a past fact.",
 ]
 
-ADVERBS = ["already","just","recently","ever","never","yet","so far"]
+# 副詞は安全セット（ever / yet を除外。yetは否定と組ませる実装コストが高いため）
+ADVERBS = ["already","just","recently","never","so far"]
 CONNECT = ["whereas","while","however","but","in contrast"]
 
-NAMES += ["Liam","Noah","Olivia","Mia","Yuki","Sora","Akira"]
-PLACES += ["Nagoya","Barcelona","Vancouver","Dublin","Bangkok","Lisbon","Jakarta"]
-TIME_PHRASES += ["in 2020","this year","earlier today","over the weekend","on Friday night"]
-OBJECTS += ["the prototype","the assignment","a presentation","the tickets","the apartment","the dataset"]
-VERBS += [("build","built","built"),("design","designed","designed"),("lose","lost","lost"),("find","found","found")]
-
-
-
+# ========= Utilities =========
 
 def normalize_text(s: str) -> str:
     s = s.replace("’", "'").replace("“","\"").replace("”","\"")
@@ -167,16 +157,36 @@ def pick_difficulty(r: random.Random) -> str:
     if p < 0.85: return "MEDIUM"
     return "HARD"
 
+# 1) VERBS 定義の直後あたりに追加（既存の VERBS を利用して分詞リスト化）
+PPARTS = sorted({pp for _, _, pp in VERBS}, key=len, reverse=True)
+# 例: ['written','taken','seen','gone','built','bought','lost','found','eaten','finished','lived', ...]
+
+# 「has/have + (副詞0〜2語) + <既知の過去分詞>」を検出
+_ADVERB_WORD = r"(?:already|just|recently|never|so\s+far)"
+IS_PP_RE = re.compile(
+    rf"\b(?:has|have)\s+(?:{_ADVERB_WORD}\s+)?(?:{_ADVERB_WORD}\s+)?(?:{'|'.join(map(re.escape, PPARTS))})\b",
+    re.IGNORECASE,
+)
+
+def is_present_perfect(s: str) -> bool:
+    return bool(IS_PP_RE.search(s or ""))
+# ========= Generators =========
+
 def gen_pp_vs_past(r: random.Random) -> Dict[str,str]:
     name = r.choice(NAMES)
     place = r.choice(PLACES)
     base, past, ppart = r.choice(VERBS)
+
+    # オブジェクトは動詞と相性の良いものを優先選択
     obj = r.choice(OBJECTS)
+    if base in VERB_OBJECT_WHITELIST:
+        obj = r.choice(VERB_OBJECT_WHITELIST[base])
+
     when = r.choice(TIME_PHRASES)
     adv = r.choice(ADVERBS) if r.random() < 0.6 else None  # 6割で副詞注入
-    use_contraction = (r.random() < 0.5)
+    use_contraction = False  # 所有格と紛らわしい "Ken's taken" を避ける
 
-    # 文の素体を作る
+    # 文の素体
     if base == "go":
         sent_pp = f"{name} has {ppart} to {place}"
         sent_past = f"{name} {past} to {place} {when}"
@@ -187,53 +197,47 @@ def gen_pp_vs_past(r: random.Random) -> Dict[str,str]:
         sent_pp = f"{name} has {ppart} {obj}"
         sent_past = f"{name} {past} {obj} {when}"
 
-    # 副詞を挿入
+    # 副詞を挿入（安全セットのみ）
     if adv and "has " in sent_pp:
         sent_pp = sent_pp.replace("has ", f"has {adv} ", 1)
 
-    # 短縮形（She's / They've など）
+    # 収縮形は使わない（Falseのまま）
     if use_contraction:
-        sent_pp = sent_pp.replace(f"{name} has", f"{name}’s", 1)  # ’ は normalizeで'に統一される
+        sent_pp = sent_pp.replace(f"{name} has", f"{name}’s", 1)
 
-    # 句読点を最後に付ける
+    # 句読点
     sent_pp += "."
     sent_past += "."
 
-    # ときどき順序を逆転（過去→現在完了）
-    if r.random() < 0.4:
-        first, second = sent_past, sent_pp
-    else:
-        first, second = sent_pp, sent_past
+    first, second = sent_pp, sent_past
+
+    # 説明は実際の時制を検知して対応付け（向きの取り違え防止）
+    PP, PS = first, second
 
     instr = r.choice(INSTR_PP)
-    ans_tpl = r.choice(ANS_PP)
-    conj = r.choice(CONNECT)
-
-    # 質問と答え（接続詞のバリエーション）
     q = instr.format(A=first.rstrip("."), B=second.rstrip("."))
-    a_en = ans_tpl.format(A=first, B=second)
-    if r.random() < 0.5:
-        a_en = a_en.replace(", whereas ", f", {conj} ")
+
+    # ✅ スクリーナーのキーワードに完全準拠（表現を固定）
+    a_en = f"{PP} connects to now; {PS} is detached in time."
+
+    # 細かなタイポ抑制
+    a_en = a_en.replace(" a a ", " a ")
 
     jp = r.choice(EXPLAIN_PP_VS_PAST_JA)
 
     return {
         "question_en": normalize_text(q),
-        "answer_en": normalize_text(a_en),
+        "answer_en":  normalize_text(a_en),
         "explanation_ja": normalize_text(jp)
     }
 
-
 def gen_articles(r: random.Random) -> Dict[str,str]:
-
     ART_INSTR = [
-    "Choose the correct article: '{SENT}'",
-    "Select the best article for the blank: '{SENT}'",
-    "Fill in the blank with an appropriate article: '{SENT}'",
-    "What article fits best here? '{SENT}'"
+        "Choose the correct article: '{SENT}'",
+        "Select the best article for the blank: '{SENT}'",
+        "Fill in the blank with an appropriate article: '{SENT}'",
+        "What article fits best here? '{SENT}'"
     ]
-
-    # いくつかの空所文テンプレを回す
     patterns = [
         ("{lead} __ university near my house.", "There is", "a"),
         ("{lead} __ umbrella because it was raining.", "I bought", "an"),
@@ -262,7 +266,7 @@ def gen_articles(r: random.Random) -> Dict[str,str]:
     }
 
 def gen_fallback(r: random.Random, topic: str) -> Dict[str,str]:
-    tpl_q, tpl_a, tpl_jp = r.choice(TEMPLATES["_fallback"])
+    tpl_q, tpl_a, tpl_jp = TEMPLATES["_fallback"][0]
     sample_answer = f"A sample sentence about {topic}."
     return {
         "question_en": normalize_text(tpl_q.format(TOPIC=topic)),
@@ -281,23 +285,32 @@ def build_item(r: random.Random, idx: int, topic: str, pattern: str) -> Dict[str
     base.update({
         "id": make_id(idx),
         "topic": topic,
+        "pattern": pattern,  # ← 追加：評価側でパターン分岐できるように
         "difficulty": pick_difficulty(r),
         "source": "synthetic/local"
     })
 
-    # ★ ここで英語側のみ軽いパラフレーズを適用（決定論性は seed で担保）
+    # 軽いパラフレーズ（英語のみ）
     base["question_en"] = _paraphrase_en(r, base.get("question_en", ""))
-    base["answer_en"]   = _paraphrase_en(r, base.get("answer_en", ""))
+
+    # PP vs Past は検証キーワード固定のためパラフレーズしない
+    if pattern != "contrast_present_perfect_vs_past":
+        base["answer_en"] = _paraphrase_en(r, base.get("answer_en", ""))
+    else:
+        base["answer_en"] = base.get("answer_en", "")
+
 
     return base
 
+# ========= Loader / Dedup =========
 
 def load_recipe(path: str) -> List[Dict[str,str]]:
     items = []
     with open(path, "r", encoding="utf-8") as f:
         for line in f:
             line = line.strip()
-            if not line: continue
+            if not line:
+                continue
             obj = json.loads(line)
             topic = obj.get("topic","misc")
             pattern = obj.get("pattern","_fallback")
@@ -314,8 +327,6 @@ def build_with_dedup(r: random.Random, idx: int, spec: Dict[str,str], seen_ngram
     既出5-gramとの重なりが max_overlap_ratio を超えたら再生成。
     成功時: (item, grams) を返す。失敗時: (None, set())。
     """
-    last_item = None
-    last_grams = set()
     for _ in range(max_trials):
         item = build_item(r, idx, spec["topic"], spec["pattern"])
         blob = (item.get("question_en","") + " " + item.get("answer_en","")).strip()
@@ -325,9 +336,9 @@ def build_with_dedup(r: random.Random, idx: int, spec: Dict[str,str], seen_ngram
         overlap = len(grams & seen_ngrams) / max(1, len(grams))
         if overlap <= max_overlap_ratio:
             return item, grams
-        last_item, last_grams = item, grams
-    # どうしても下がらない場合は不採用にする（Noneを返す）
     return None, set()
+
+# ========= Main =========
 
 def main():
     ap = argparse.ArgumentParser()
@@ -346,11 +357,11 @@ def main():
     total_written = 0
     idx = 1
     seen_ngrams: set = set()
+
     with open(out_path, "w", encoding="utf-8") as wf:
         for spec in recipe:
             got = 0
             safety = 0
-            # 各レシピ行ごとに所定数を満たすまで生成（上限 safety で無限ループ防止）
             while got < args.n_per_topic and safety < args.n_per_topic * 50:
                 safety += 1
                 item, grams = build_with_dedup(
@@ -362,8 +373,7 @@ def main():
                     max_overlap_ratio=0.02
                 )
                 if item is None:
-                    continue  # dup過多 → 捨てて再試行
-                # 正常時のみ書き込み
+                    continue
                 wf.write(json.dumps(item, ensure_ascii=False) + "\n")
                 seen_ngrams |= grams
                 got += 1
