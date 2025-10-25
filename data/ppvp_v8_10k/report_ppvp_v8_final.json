@@ -1,0 +1,10 @@
+{
+  "metrics": {
+    "count": 10000,
+    "language_match": 1.0,
+    "dup_5gram_rate": 0.0001,
+    "toxicity_rate": 0.0,
+    "pii_rate": 0.0
+  },
+  "pass": true
+}

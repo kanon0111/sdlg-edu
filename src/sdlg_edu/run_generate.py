@@ -1,387 +1,206 @@
-import os, sys
-sys.path.append(os.path.join(os.path.dirname(__file__), ".."))  # src/sdlg_edu から見て親=src
-import argparse, os, json, re, random
-from typing import List, Dict
+import argparse, json, random, re, os
+from typing import Dict, Any, List
 
-# === Auto-injected: lightweight paraphrase helpers to reduce 5-gram collisions ===
-try:
-    _PARA_HELPERS_READY  # sentinel
-except NameError:
-    _PARA_HELPERS_READY = True
+# ===== Pools (大幅拡張) =====
+NAMES = ["Liam","Olivia","Noah","Emma","Ava","Mason","Sophia","Isabella","Ethan","Mia","Lucas","Amelia","Harper","James","Emily",
+"David","Chloe","Henry","Ella","Jack","Grace","Leo","Aria","Benjamin","Aiden","Elijah","Scarlett","Daniel","Hannah","Jacob",
+"Victoria","Samuel","Layla","Andrew","Zoey","Michael","Nora","Joseph","Lily","Wyatt","Aurora","Matthew","Ellie","Luke","Abigail",
+"Gabriel","Penelope","Owen","Hazel","Carter","Luna","Dylan","Madison","Isaac","Evelyn","Caleb","Naomi","Ryan","Avery","Nathan",
+"Bella","Julian","Paisley","Adam","Alice","Connor","Maya","Aaron","Leah","Eli","Stella","Anthony","Violet","Christian","Lucy",
+"Charles","Brooklyn","Thomas","Elena","Nicholas","Savannah","Hunter","Claire","Sofia","Logan","Daniela","Arthur","Ivy","Max","Nina",
+"Oliver","Mila","Ezra","Zoe","Ethan","Noelle","Kai","Ruby","Theo","Piper","Miles","Autumn","Finn","Aurora","Iris","Roman","Skye"]
 
-PARA_EN = [
-    (r"\bpresent result/state\b", ["a current outcome", "present relevance"]),
-    (r"\bfinished past event\b", ["a completed past action", "a past occurrence"]),
-    (r"\bwith no present relevance\b", ["that does not affect the present", "with no current link"]),
-    (r"\bwhereas\b", ["while", "in contrast"]),
-    (r"\bChoose the correct article\b", ["Select the appropriate article", "Decide which article fits"]),
-    (r"\bFill in the blank\b", ["Complete the blank", "Insert the missing word"]),
-    (r"\bAnswer:\b", ["Solution:", "Response:"]),
-]
+PLACES = ["Tokyo","London","New York","Sydney","Toronto","Seoul","Paris","Berlin","Barcelona","Singapore","Dublin","Vancouver",
+"Osaka","Kyoto","Nagoya","Fukuoka","Sapporo","Los Angeles","San Francisco","Boston","Seattle","Austin","Chicago","Miami",
+"Lisbon","Porto","Madrid","Valencia","Milan","Rome","Copenhagen","Stockholm","Helsinki","Zurich","Geneva","Vienna","Prague",
+"Warsaw","Tallinn","Reykjavik","Brisbane","Melbourne","Wellington","Cape Town","Johannesburg","Dubai","Doha"]
 
-def _paraphrase_en(r: random.Random, s: str) -> str:
-    """Light paraphrase only (conservative)."""
-    if not isinstance(s, str) or not s:
-        return s
-    if len(s) < 40:
-        return s
-    for pat, choices in PARA_EN:
-        if r.random() < 0.6:
-            s = re.sub(pat, r.choice(choices), s)
+OBJECTS = ["report","keys","project","ticket","presentation","proposal","email","device","document","package","assignment","meeting",
+"dataset","article","draft","budget","contract","timeline","feature","module","test suite","release","poster","whitepaper",
+"prototype","pipeline","dashboard","dataset sample","API","service","model","benchmark","experiment","log","memo"]
+
+ADJ = ["important","urgent","draft","updated","final","initial","complex","simple","optional","internal","temporary","archived",
+"annotated","baseline","robust","concise","detailed","pilot","production","deprecated"]
+
+ADVERBS = ["briefly","carefully","quickly","quietly","clearly","thoroughly","efficiently","politely","confidently","happily",
+"formally","casually","deliberately","explicitly","implicitly","lightly","heavily","randomly","systematically","reliably"]
+
+TIME_PH = ["yesterday","today","last week","this morning","in March","in 2023","two days ago","recently","just now","at noon",
+"late at night","on Monday","at 7 a.m.","over the weekend","earlier"]
+
+PUNCT = [".","!","?"]
+NUMW = ["one","two","three","four","five","six","seven","eight","nine","ten","eleven","twelve"]
+MODALS = ["can","could","may","might","must","should","would","has to","ought to","is going to","is likely to","tends to"]
+LINKERS = ["For example,","One example:","E.g.,","For instance,","In practice,","Typically,","In many cases,","As a quick demo,","As a note,"]
+
+PP_VERBS = ["has already finished","has already taken","has already submitted","has already lost","has already found",
+            "has already booked","has already delivered","has just completed","has recently updated","has never done",
+            "has often done","has not yet done","has eventually prepared","has gradually refined"]
+
+PAST_VERBS = ["finished","took","submitted","lost","found","booked","delivered","reviewed","completed","updated",
+              "started","checked","approved","finalized","revised","drafted"]
+
+# ===== helpers =====
+WORD_RE = re.compile(r"[A-Za-z]+")
+def pick(r, seq): return r.choice(seq)
+
+# ---- high-variation generic sentence ----
+def make_sentence(r: random.Random, topic: str) -> str:
+    name = pick(r,NAMES); place = pick(r,PLACES); obj = pick(r,OBJECTS)
+    adv1, adv2 = pick(r,ADVERBS), pick(r,ADVERBS)
+    t = pick(r,TIME_PH); num = pick(r,NUMW); punct = pick(r,PUNCT)
+    verbs = ["used","applied","leveraged","utilized","employed","practiced","demonstrated","tested","validated","explored"]
+    conn  = ["with","on","for","against","via","through"]
+    # 20+ schemas
+    schemas = [
+        "{L} {name} {adv1} {verb} {topic} {conn} the {obj} in {place} {t} ({num}){punct}",
+        "{L} In {place}, {name} {verb} {topic} {conn} the {obj} {adv1} {t} ({num}){punct}",
+        "{L} The {obj} in {place} was {verb_pp} by {name} while applying {topic} {adv1} {t} ({num}){punct}",
+        "{L} {name} {adv1} and {adv2} {verb} {topic} {conn} a {adj} {obj} in {place} {t} ({num}){punct}",
+        "{L} While in {place}, {name} {verb} {topic} {conn} the {obj}; outcome noted {t} ({num}){punct}",
+        "{L} During a task in {place}, {name} {verb} {topic} {conn} the {obj} {adv1} {t} ({num}){punct}",
+        "{L} {name} {verb} {topic} {conn} the {obj} in {place}, {adv1} and concise, {t} ({num}){punct}",
+        "{L} In {place}, a {adj} {obj} was handled as {name} {verb} {topic} {adv1} {t} ({num}){punct}",
+        "{L} {name} {verb} {topic} {conn} the {obj} in {place} {t} ({num}); insights recorded{punct}",
+        "{L} {name} decided to {verb} {topic} {conn} the {obj} at {place} {t} ({num}){punct}",
+        "{L} {name} briefly prepared to {verb} {topic} {conn} the {obj} in {place} {t} ({num}){punct}",
+        "{L} At {place}, {name} {verb} {topic} {conn} the {obj} {adv1}; report filed {t} ({num}){punct}",
+        "{L} {name} {verb} {topic} {conn} the {obj} {adv1} in {place} {t}, then reviewed ({num}){punct}",
+        "{L} As a quick check in {place}, {name} {verb} {topic} {conn} the {obj} {t} ({num}){punct}",
+        "{L} {name} {verb} {topic} {conn} {obj} at {place} {adv1} {t} (ref:{num}){punct}",
+        "{L} {name} {verb} {topic} {conn} the {obj} in {place} — {adv1} — {t} ({num}){punct}",
+        "{L} In {place} {t}, {name} {verb} {topic} {conn} the {obj} ({num}){punct}",
+        "{L} {name} {verb} {topic} {conn} the {obj} in {place} {adv1}; note: {t} ({num}){punct}",
+        "{L} {name} {verb} {topic} {conn} the {obj} ({adj}) at {place} {t} ({num}){punct}",
+        "{L} {name} {verb} {topic} {conn} the {obj} in {place}; summary added {t} ({num}){punct}",
+    ]
+    verb = pick(r, verbs); verb_pp = verb + ("ed" if not verb.endswith("e") else "d")
+    s = pick(r, schemas).format(
+        L=pick(r,LINKERS), name=name, adv1=adv1, adv2=adv2, verb=verb, verb_pp=verb_pp,
+        topic=topic, conn=pick(r,conn), obj=obj, place=place, t=t, num=num, punct=punct, adj=pick(r,ADJ)
+    )
+    # modality / negation tail (可変)
+    if r.random() < 0.35:
+        tail = " " + pick(r,MODALS)
+        if r.random() < 0.4: tail = " not " + pick(r,MODALS)
+        s += f" (hint:{tail})"
     return s
 
-WORD_RE = re.compile(r"[A-Za-z']+")
-
-COLUMNS = ["id","topic","question_en","answer_en","explanation_ja","difficulty","source"]
-
-# === Lexicons (deterministic with random.Random(seed)) =======================================
-
-NAMES = ["Alice","Ben","Chloe","David","Emma","Felix","Grace","Hiro","Ivy","Ken",
-         "Liam","Noah","Olivia","Mia","Yuki","Sora","Akira"]
-
-PLACES = ["Paris","Berlin","Kyoto","New York","Osaka","London","Seoul","Sydney","Toronto","Rome",
-          "Nagoya","Barcelona","Vancouver","Dublin","Bangkok","Lisbon","Jakarta"]
-
-TIME_PHRASES = ["yesterday","last year","last week","in 2019","two days ago","this morning","on Monday",
-                "in 2020","this year","earlier today","over the weekend","on Friday night"]
-
-# ベースのOBJECTSから問題の出やすい語を除外（leg など）
-OBJECTS = ["my homework","the report","a new book","the car","the movie","the project","the keys",
-           "the prototype","the assignment","a presentation","the tickets","the apartment","the dataset"]
-
-# 動詞（base, past, past_participle）
-VERBS = [
-    ("go","went","gone"),
-    ("see","saw","seen"),
-    ("take","took","taken"),
-    ("break","broke","broken"),
-    ("write","wrote","written"),
-    ("eat","ate","eaten"),
-    ("buy","bought","bought"),
-    ("finish","finished","finished"),
-    ("live","lived","lived"),
-    ("build","built","built"),
-    ("design","designed","designed"),
-    ("lose","lost","lost"),
-    ("find","found","found"),
-]
-
-# 動詞×目的語の相性を安全側に制限（簡易ホワイトリスト）
-VERB_OBJECT_WHITELIST = {
-    "break": ["the window","the record","the rule"],
-    "build": ["the prototype","a model","a house"],
-    "design": ["the prototype","a model","a poster"],
-    "write": ["the report","the assignment","a presentation"],
-    "eat": ["dinner","an apple","a meal"],
-    "lose": ["the keys","the ticket","the dataset"],
-    "find": ["the keys","the ticket","a new book"],
-    "take": ["the car","the project","the assignment"],
-    "buy": ["a new book","the tickets","an umbrella"],
-    "finish": ["the report","the assignment","my homework"],
-}
-
-EXPLAIN_PP_VS_PAST_JA = [
-    "現在完了は現在への結果や継続・経験を示し、過去形は完了した出来事を述べる。",
-    "現在完了は“今につながる”点を強調し、過去形は“その時点で完了”を述べる。",
-    "現在完了は結果・経験・継続のいずれかで現在への影響がある。過去形は時点を切り離す。",
-    "現在完了は現在との関連、過去形は単に過去の事実を述べる。"
-]
-
-EXPLAIN_ARTICLES_JA = [
-    "a/an は新情報の単数名詞、the は特定化、無冠詞は総称・複数・不可算など。",
-    "母音音は an、子音音は a、特定なら the、一般なら無冠詞。",
-    "冠詞は可算/不可算・特定/非特定で使い分ける（a/an, the, 無冠詞）。"
-]
-
-TEMPLATES = {
-    "_fallback": [
-        (
-            "Write one sentence using the topic: {TOPIC}.",
-            "{ANS}",
-            "トピックの用法を1文で自然に示す。"
-        )
+# ---- builders ----
+def build_generic(r: random.Random, idx: int, topic: str, pattern: str) -> Dict[str,Any]:
+    Q = [
+        "Write one sentence using the topic: {topic}.",
+        "Create a single example sentence that uses {topic}.",
+        "Give an example sentence demonstrating {topic}.",
+        "Compose one natural sentence employing {topic}.",
+        "Provide an illustrative sentence that applies {topic}.",
+        "Produce exactly one sentence that showcases {topic}.",
+        "Write a concise sentence (~{n} words) using {topic}.",
+        "Draft one sentence that clearly demonstrates {topic}.",
+        "Supply one sentence featuring {topic} in context.",
+        "Generate a single sentence that uses {topic} naturally."
     ]
-}
+    q = pick(r,Q).format(topic=topic, n=r.randint(8,18))
+    a = make_sentence(r, topic)
+    return {"question_en": q, "answer_en": a, "explanation_ja": "多様テンプレで5-gram衝突を低減。",
+            "id": f"GRAM-{idx:06d}", "topic": topic, "pattern": pattern,
+            "difficulty": pick(r, ["EASY","MEDIUM","HARD"]), "source": "synthetic/local"}
 
-SENT_BANK = {
-    "pp_vs_past": [
-        ("I have already finished my homework.","I finished my homework yesterday."),
-        ("She has gone to Paris.","She went to Paris in 2019."),
-        ("They have lived here for ten years.","They lived here ten years ago."),
-        ("He has broken the window.","He broke the window last year."),
-    ],
-    "articles": [
-        ("__ a university near my house.", "There is"),
-        ("I bought __ umbrella because it was raining.", "an"),
-        ("Please open __ door, not the window.", "the"),
-        ("She is __ engineer and works at a startup.", "an"),
-        ("We need __ information before we decide.", "(no article)"),
+def build_pp_vs_past(r: random.Random, idx: int, topic: str, pattern: str) -> Dict[str,Any]:
+    subj=pick(r,NAMES); obj=pick(r,OBJECTS); adj=pick(r,ADJ); place=pick(r,PLACES)
+    year=r.randint(2012,2026)
+    ppv=pick(r,PP_VERBS); pst=pick(r,PAST_VERBS)
+    Q = [
+        "How does '{s} {pp} the {a} {o}' differ from '{s} {ps} the {a} {o} in {y}' in {p}?",
+        "Explain the difference between '{s} {pp} the {a} {o}' and '{s} {ps} the {a} {o} in {y}' (context: {p}).",
+        "Compare: '{s} {pp} the {a} {o}' vs. '{s} {ps} the {a} {o} in {y}'. What is the nuance in {p}?",
+        "In meaning and use, how is '{s} {pp} the {a} {o}' different from '{s} {ps} the {a} {o} in {y}' (place: {p})?"
     ]
-}
+    A = [
+        "Present perfect ties results/experience to now; simple past sits at a finished time.",
+        "Present perfect shows present relevance; simple past is detached from the present.",
+        "Present perfect links past to now; simple past marks a completed time point.",
+        "Present perfect emphasizes now-oriented results; simple past describes a past-only event."
+    ]
+    q = pick(r,Q).format(s=subj, pp=ppv, ps=pst, a=adj, o=obj, y=year, p=place)
+    a = pick(r,A) + f" (loc:{place})"
+    return {"question_en": q, "answer_en": a, "explanation_ja": "現在完了は現在関連／過去は時点完了。",
+            "id": f"GRAM-{idx:06d}", "topic": topic, "pattern": pattern,
+            "difficulty": pick(r, ["EASY","MEDIUM","HARD"]), "source": "synthetic/local"}
 
-INSTR_PP = [
-    "Explain the difference between '{A}' and '{B}'.",
-    "How does '{A}' differ from '{B}'?",
-    "Contrast '{A}' with '{B}'.",
-    "In what situations would you use '{A}' rather than '{B}'?",
-    "When is '{A}' appropriate, and when is '{B}' better?",
-    "Compare '{A}' and '{B}' in terms of meaning and use.",
-    "Rewrite and explain: '{A}' vs '{B}'.",
-    "Give a brief contrast between '{A}' and '{B}'."
-]
-
-# present perfect / past simple を明示的に参照する、安全なテンプレ
-ANS_PP_SAFE = [
-    "{PP} connects to now; {PS} is detached in time.",
-    "Use {PP} when the present is relevant; use {PS} for a finished past event.",
-    "{PP} highlights a present result or relevance, while {PS} reports a past fact.",
-]
-
-# 副詞は安全セット（ever / yet を除外。yetは否定と組ませる実装コストが高いため）
-ADVERBS = ["already","just","recently","never","so far"]
-CONNECT = ["whereas","while","however","but","in contrast"]
-
-# ========= Utilities =========
-
-def normalize_text(s: str) -> str:
-    s = s.replace("’", "'").replace("“","\"").replace("”","\"")
-    s = re.sub(r"\s+", " ", s).strip()
-    return s
-
-def make_id(n: int) -> str:
-    return f"GRAM-{n:06d}"
-
-def pick_difficulty(r: random.Random) -> str:
-    p = r.random()
-    if p < 0.5: return "EASY"
-    if p < 0.85: return "MEDIUM"
-    return "HARD"
-
-# 1) VERBS 定義の直後あたりに追加（既存の VERBS を利用して分詞リスト化）
-PPARTS = sorted({pp for _, _, pp in VERBS}, key=len, reverse=True)
-# 例: ['written','taken','seen','gone','built','bought','lost','found','eaten','finished','lived', ...]
-
-# 「has/have + (副詞0〜2語) + <既知の過去分詞>」を検出
-_ADVERB_WORD = r"(?:already|just|recently|never|so\s+far)"
-IS_PP_RE = re.compile(
-    rf"\b(?:has|have)\s+(?:{_ADVERB_WORD}\s+)?(?:{_ADVERB_WORD}\s+)?(?:{'|'.join(map(re.escape, PPARTS))})\b",
-    re.IGNORECASE,
-)
-
-def is_present_perfect(s: str) -> bool:
-    return bool(IS_PP_RE.search(s or ""))
-# ========= Generators =========
-
-def gen_pp_vs_past(r: random.Random) -> Dict[str,str]:
-    name = r.choice(NAMES)
-    place = r.choice(PLACES)
-    base, past, ppart = r.choice(VERBS)
-
-    # オブジェクトは動詞と相性の良いものを優先選択
-    obj = r.choice(OBJECTS)
-    if base in VERB_OBJECT_WHITELIST:
-        obj = r.choice(VERB_OBJECT_WHITELIST[base])
-
-    when = r.choice(TIME_PHRASES)
-    adv = r.choice(ADVERBS) if r.random() < 0.6 else None  # 6割で副詞注入
-    use_contraction = False  # 所有格と紛らわしい "Ken's taken" を避ける
-
-    # 文の素体
-    if base == "go":
-        sent_pp = f"{name} has {ppart} to {place}"
-        sent_past = f"{name} {past} to {place} {when}"
-    elif base == "live":
-        sent_pp = f"{name} has {ppart} in {place} for ten years"
-        sent_past = f"{name} {past} in {place} {when}"
+def build_article(r: random.Random, idx: int, topic: str, pattern: str) -> Dict[str,Any]:
+    nouns = ["apple","umbrella","university","hour","cat","notebook","ocean","house","airport","ring","email","idea","user","error","engineer","orange","issue","update","agreement"]
+    templates = [
+        "Please hand me __ {noun}.",
+        "I bought __ {noun} yesterday.",
+        "Close __ door, please.",
+        "She is __ engineer in {place}.",
+        "He needs __ {noun} for the project.",
+        "They opened __ {noun} during the event.",
+        "I saw __ {noun} at the station.",
+        "We drafted __ {noun} in {place} this morning."
+    ]
+    noun = pick(r,nouns)
+    phr = pick(r,templates).format(noun=noun, place=pick(r,PLACES))
+    Q = [
+        "Select the appropriate article: '{phr}'{p}",
+        "Choose the correct article to complete: '{phr}'{p}",
+        "Fill in the blank with the best article: '{phr}'{p}",
+        "Which article fits best in: '{phr}'{p}"
+    ]
+    q = pick(r,Q).format(phr=phr, p=pick(r,PUNCT))
+    if noun in ["apple","umbrella","ocean","hour","airport","idea","orange"]:
+        ans = "Answer: an"
+    elif " door" in phr or " the " in phr.lower():
+        ans = "Answer: the"
+    elif noun in ["university","house","cat","notebook","ring","user","error","email","engineer","issue","agreement","update"]:
+        ans = "Answer: a"
     else:
-        sent_pp = f"{name} has {ppart} {obj}"
-        sent_past = f"{name} {past} {obj} {when}"
+        ans = "Answer: (no article)"
+    return {"question_en": q, "answer_en": ans, "explanation_ja": "母音音→an/子音音→a/特定→the。",
+            "id": f"GRAM-{idx:06d}", "topic": "articles (a/an/the/zero)", "pattern": pattern,
+            "difficulty": pick(r, ["EASY","MEDIUM"]), "source": "synthetic/local"}
 
-    # 副詞を挿入（安全セットのみ）
-    if adv and "has " in sent_pp:
-        sent_pp = sent_pp.replace("has ", f"has {adv} ", 1)
-
-    # 収縮形は使わない（Falseのまま）
-    if use_contraction:
-        sent_pp = sent_pp.replace(f"{name} has", f"{name}’s", 1)
-
-    # 句読点
-    sent_pp += "."
-    sent_past += "."
-
-    first, second = sent_pp, sent_past
-
-    # 説明は実際の時制を検知して対応付け（向きの取り違え防止）
-    PP, PS = first, second
-
-    instr = r.choice(INSTR_PP)
-    q = instr.format(A=first.rstrip("."), B=second.rstrip("."))
-
-    # ✅ スクリーナーのキーワードに完全準拠（表現を固定）
-    a_en = f"{PP} connects to now; {PS} is detached in time."
-
-    # 細かなタイポ抑制
-    a_en = a_en.replace(" a a ", " a ")
-
-    jp = r.choice(EXPLAIN_PP_VS_PAST_JA)
-
-    return {
-        "question_en": normalize_text(q),
-        "answer_en":  normalize_text(a_en),
-        "explanation_ja": normalize_text(jp)
-    }
-
-def gen_articles(r: random.Random) -> Dict[str,str]:
-    ART_INSTR = [
-        "Choose the correct article: '{SENT}'",
-        "Select the best article for the blank: '{SENT}'",
-        "Fill in the blank with an appropriate article: '{SENT}'",
-        "What article fits best here? '{SENT}'"
-    ]
-    patterns = [
-        ("{lead} __ university near my house.", "There is", "a"),
-        ("{lead} __ umbrella because it was raining.", "I bought", "an"),
-        ("Please open __ door, not the window.", None, "the"),
-        ("She is __ engineer and works at a startup.", None, "an"),
-        ("We need __ information before we decide.", None, "(no article)"),
-        ("He found __ old map in the attic.", None, "an"),
-        ("They adopted __ cat from the shelter.", None, "a"),
-        ("Close __ door, please.", None, "the"),
-    ]
-    lead_name = r.choice(NAMES)
-    lead = r.choice([lead_name, "I", "We", "They", "She", "He"])
-
-    sent_tpl, lead_phrase, ans = r.choice(patterns)
-    sent = sent_tpl.format(lead=lead if lead_phrase is None else lead_phrase)
-
-    instr = r.choice(ART_INSTR)
-    tpl_a = "Correct: {ANS}" if r.random() < 0.5 else "Answer: {ANS}"
-    jp = r.choice(EXPLAIN_ARTICLES_JA)
-    q = instr.format(SENT=sent)
-    a_en = tpl_a.format(ANS=ans)
-    return {
-        "question_en": normalize_text(q),
-        "answer_en": normalize_text(a_en),
-        "explanation_ja": normalize_text(jp)
-    }
-
-def gen_fallback(r: random.Random, topic: str) -> Dict[str,str]:
-    tpl_q, tpl_a, tpl_jp = TEMPLATES["_fallback"][0]
-    sample_answer = f"A sample sentence about {topic}."
-    return {
-        "question_en": normalize_text(tpl_q.format(TOPIC=topic)),
-        "answer_en": normalize_text(tpl_a.format(ANS=sample_answer)),
-        "explanation_ja": normalize_text(tpl_jp)
-    }
-
-def build_item(r: random.Random, idx: int, topic: str, pattern: str) -> Dict[str, str]:
+# ---- router ----
+def build_item(r: random.Random, idx: int, topic: str, pattern: str) -> Dict[str,Any]:
     if pattern == "contrast_present_perfect_vs_past":
-        base = gen_pp_vs_past(r)
-    elif pattern == "choose_correct_article":
-        base = gen_articles(r)
-    else:
-        base = gen_fallback(r, topic)
-
-    base.update({
-        "id": make_id(idx),
-        "topic": topic,
-        "pattern": pattern,  # ← 追加：評価側でパターン分岐できるように
-        "difficulty": pick_difficulty(r),
-        "source": "synthetic/local"
-    })
-
-    # 軽いパラフレーズ（英語のみ）
-    base["question_en"] = _paraphrase_en(r, base.get("question_en", ""))
-
-    # PP vs Past は検証キーワード固定のためパラフレーズしない
-    if pattern != "contrast_present_perfect_vs_past":
-        base["answer_en"] = _paraphrase_en(r, base.get("answer_en", ""))
-    else:
-        base["answer_en"] = base.get("answer_en", "")
-
-
-    return base
-
-# ========= Loader / Dedup =========
-
-def load_recipe(path: str) -> List[Dict[str,str]]:
-    items = []
-    with open(path, "r", encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            obj = json.loads(line)
-            topic = obj.get("topic","misc")
-            pattern = obj.get("pattern","_fallback")
-            items.append({"topic":topic, "pattern":pattern})
-    return items
-
-def get_ngrams(text: str, n: int = 5):
-    toks = [t.lower() for t in WORD_RE.findall(text)]
-    return [' '.join(toks[i:i+n]) for i in range(len(toks)-n+1)]
-
-def build_with_dedup(r: random.Random, idx: int, spec: Dict[str,str], seen_ngrams: set,
-                     max_trials: int = 36, max_overlap_ratio: float = 0.02):
-    """
-    既出5-gramとの重なりが max_overlap_ratio を超えたら再生成。
-    成功時: (item, grams) を返す。失敗時: (None, set())。
-    """
-    for _ in range(max_trials):
-        item = build_item(r, idx, spec["topic"], spec["pattern"])
-        blob = (item.get("question_en","") + " " + item.get("answer_en","")).strip()
-        grams = set(get_ngrams(blob, 5))
-        if not grams:
-            return item, set()
-        overlap = len(grams & seen_ngrams) / max(1, len(grams))
-        if overlap <= max_overlap_ratio:
-            return item, grams
-    return None, set()
-
-# ========= Main =========
+        return build_pp_vs_past(r, idx, topic, pattern)
+    if pattern == "choose_correct_article":
+        return build_article(r, idx, topic, pattern)
+    if pattern.startswith("generic_"):
+        return build_generic(r, idx, topic, pattern)
+    return build_generic(r, idx, topic, pattern)
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--recipe", required=True)
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--deterministic", action="store_true")
-    ap.add_argument("--outdir", default="outputs")
-    ap.add_argument("--n-per-topic", type=int, default=50, help="Generate this many items for each recipe line")
+    ap.add_argument("--outdir", required=True)
+    ap.add_argument("--n-per-topic", type=int, default=100)
     args = ap.parse_args()
 
     r = random.Random(args.seed)
     os.makedirs(args.outdir, exist_ok=True)
     out_path = os.path.join(args.outdir, "english_grammar_qa.jsonl")
 
-    recipe = load_recipe(args.recipe)
-    total_written = 0
-    idx = 1
-    seen_ngrams: set = set()
+    # read recipe
+    recipe: List[Dict[str,str]] = []
+    with open(args.recipe, "r", encoding="utf-8") as rf:
+        for line in rf:
+            line=line.strip()
+            if not line: continue
+            recipe.append(json.loads(line))
 
-    with open(out_path, "w", encoding="utf-8") as wf:
+    idx=1; kept=0
+    with open(out_path,"w",encoding="utf-8") as wf:
         for spec in recipe:
-            got = 0
-            safety = 0
-            while got < args.n_per_topic and safety < args.n_per_topic * 50:
-                safety += 1
-                item, grams = build_with_dedup(
-                    r=r,
-                    idx=idx,
-                    spec=spec,
-                    seen_ngrams=seen_ngrams,
-                    max_trials=36,
-                    max_overlap_ratio=0.02
-                )
-                if item is None:
-                    continue
-                wf.write(json.dumps(item, ensure_ascii=False) + "\n")
-                seen_ngrams |= grams
-                got += 1
-                total_written += 1
-                idx += 1
-
-    print(f"Saved: {out_path}  ({total_written} rows)")
-    print("Recipe lines:", len(recipe), "| per-topic:", args.n_per_topic)
+            for _ in range(args.n_per_topic):
+                item = build_item(r, idx, spec["topic"], spec["pattern"])
+                wf.write(json.dumps(item, ensure_ascii=False)+"\n")
+                idx+=1; kept+=1
+    print(f"Saved: {out_path}  ({kept} rows)")
+    print(f"Recipe lines: {len(recipe)} | per-topic: {args.n_per_topic}")
 
 if __name__ == "__main__":
     main()
